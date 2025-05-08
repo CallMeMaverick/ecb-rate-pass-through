@@ -1,4 +1,6 @@
 library(dplyr)
+library(sandwich)
+library(lmtest)
 
 
 cor_data <- merged %>%
@@ -57,3 +59,14 @@ ggplot(cor_data, aes(x = month)) +
     )
 
 ggsave("output/figures/predicted_actual_loan_rate.png", width = 10, height = 6, dpi=300)
+
+
+# --- Heteroskedasticity-Robust Standard Errors ---
+# Calculate robust standard errors
+robust_se <- coeftest(multi_model, vcov. = vcovHC(multi_model, type ="HC1"))
+capture.output(robust_se, file = "output/tables/multi_modal_robust.txt")
+
+log_model <- lm(log(loan_rate) ~ mro_rate + mro_lag1, data = cor_data)
+summary(log_model)
+robust_log <- coeftest(log_model, vcov. = vcovHC(log_model, type = "HC1"))
+print(robust_log)
