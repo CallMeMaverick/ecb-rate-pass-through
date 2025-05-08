@@ -1,0 +1,10 @@
+
+t test of coefficients:
+
+            Estimate Std. Error t value Pr(>|t|)    
+(Intercept) 2.228050   0.055575 40.0907  < 2e-16 ***
+mro_rate    0.160528   0.281847  0.5696  0.56946    
+mro_lag1    0.586098   0.286490  2.0458  0.04177 *  
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+

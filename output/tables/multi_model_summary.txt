@@ -1,0 +1,20 @@
+
+Call:
+lm(formula = loan_rate ~ mro_rate + mro_lag1, data = cor_data)
+
+Residuals:
+     Min       1Q   Median       3Q      Max 
+-1.70787 -0.45355  0.05212  0.54867  1.33870 
+
+Coefficients:
+            Estimate Std. Error t value Pr(>|t|)    
+(Intercept)  2.22805    0.06307  35.329   <2e-16 ***
+mro_rate     0.16053    0.30305   0.530   0.5968    
+mro_lag1     0.58610    0.30298   1.934   0.0541 .  
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Residual standard error: 0.7456 on 263 degrees of freedom
+Multiple R-squared:  0.6873,	Adjusted R-squared:  0.6849 
+F-statistic:   289 on 2 and 263 DF,  p-value: < 2.2e-16
+
