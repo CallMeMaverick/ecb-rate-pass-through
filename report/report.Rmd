@@ -1,0 +1,352 @@
+---
+title: "ECB rate pass-through in Germany"
+output: html_document
+---
+
+# Introduction
+
+The purpose of this project is to investigate whether changes in the European Central Bank’s (ECB) Main Refinancing Operations (MRO) rate are effectively transmitted to retail housing loan rates in Germany. This question is central to understanding the **monetary transmission mechanism** and how quickly changes in policy rates influence household borrowing conditions.
+
+The project is based on monthly time-series data obtained from the ECB Data Portal and covers the period from January 2003 onwards. Using statistical methods including correlation analysis, linear regression, and model diagnostics, we aim to determine both the **strength** and the **timing** of the pass-through effect. We also account for potential model violations by incorporating **robust standard errors** and testing an alternative log-linear specification.
+
+---
+
+# Data Preparation
+
+We use two monthly time series:
+
+- Retail loan rates for house purchase in Germany (Annual Percentage Rate of Charge — new business)
+- ECB Main Refinancing Operations (MRO) rate
+
+Both datasets were sourced from the [ECB Data Portal](https://data.ecb.europa.eu/) and processed as follows:
+
+```r
+# Load required libraries for data manipulation and date handling
+library(tidyverse)
+library(lubridate)
+
+# === Retail housing loan rates (Germany) ===
+# Read CSV file downloaded from ECB Data Portal
+# We skip the first row (headers) and rename columns manually
+loan_data <- read_csv(
+    "data/raw/ECB Data Portal_20250507115252.csv",
+    col_names = c("date", "period", "loan_rate"),
+    skip = 1
+)
+
+# Convert date column and aggregate by month
+loan_monthly <- loan_data %>%
+    mutate(
+        date = ymd(date),
+        month = floor_date(date, "month")
+    ) %>%
+    select("month", "loan_rate")  # keep only month and rate
+
+# === MRO policy rate ===
+# Read ECB MRO rate file and process similarly
+mro_data <- read_csv(
+    "data/raw/ECB Data Portal_20250507134102.csv",
+    col_names = c("date", "period", "mro_rate"),
+    skip = 1
+)
+
+# Convert date, filter starting from Jan 2003, and take last value in each month
+mro_monthly <- mro_data %>%
+    mutate(date = ymd(date)) %>%
+    filter(date >= ymd("2003-01-31")) %>%
+    group_by(month = floor_date(date, "month")) %>%
+    summarise(mro_rate = last(mro_rate), .groups = "drop")
+
+# Save processed versions to separate files
+write.csv(loan_monthly, "data/processed/loan_monthly.csv")
+write.csv(mro_monthly, "data/processed/mro_monthly.csv")
+```
+
+We first load and prepare the two main time series for analysis. The retail housing loan rate dataset includes the Annual Percentage Rate of Charge (APRC) for new mortgage business in Germany. This dataset is converted to a monthly frequency using the start of each month as the reference.
+
+The ECB MRO dataset contains daily observations of the central bank’s main refinancing rate. Since policy rates typically change infrequently, we retain the **last observed rate** in each month to best reflect the rate that was active by month-end — aligning this with reported loan rates.
+
+Both series are saved in a clean format to the `data/processed/` directory for use in further analysis.
+
+---
+
+# Exploratory Analysis
+
+We begin by merging the processed loan and MRO datasets by month. This allows us to analyze the relationship between monetary policy and retail lending over time.
+
+```r
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+
+# Load pre-processed retail loan and MRO data
+loan_monthly <- read_csv("data/processed/loan_monthly.csv") %>% select(-1)
+mro_monthly <- read_csv("data/processed/mro_monthly.csv") %>% select(-1)
+
+# Merge datasets by month
+merged <- loan_monthly %>%
+  left_join(mro_monthly, by = "month")
+
+# Save merged dataset
+write_csv(merged, "data/processed/merged_rates.csv")
+
+# Plot both rates over time
+ggplot(merged, aes(x = month)) +
+  geom_line(aes(y = loan_rate, color = "Retail Housing Loan Rate"), linewidth = 1) +
+  geom_line(aes(y = mro_rate, color = "MRO Rate"), linewidth = 1, linetype = "dashed") +
+  labs(title = "ECB MRO vs. Retail Housing Loan Rate (Germany)",
+       x = "Month", y = "Interest rate, (%)", color = "Rate Type") +
+  theme_minimal(base_family = "Arial", base_size = 12) +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    legend.position = "bottom",
+    legend.title = element_text(color = "black"),
+    legend.text = element_text(color = "black"),
+    plot.title = element_text(face = "bold", size = 14, color = "black"),
+    axis.text = element_text(color = "black"),
+    axis.title = element_text(color = "black")
+  )
+
+# Save plot to file
+ggsave("output/figures/mro_vs_retail_rate.png")
+```
+
+The line plot shows the evolution of both the ECB’s MRO rate and Germany’s retail housing loan rate from 2003 onward. We observe:
+
+- **Visual co-movement** between the two series, particularly during rate hike and cut cycles
+- A potential **lagged relationship**, where changes in the MRO rate precede movements in the retail rate
+- A structural difference in levels, suggesting an incomplete or delayed pass-through
+
+<p style="text-align: center;">
+  <img src="/Users/maverick/Desktop/ecb-rate-pass-through/output/figures/mro_vs_retail_rate.png" width="90%">
+</p>
+<p style="text-align: center; font-size: 15px; margin-top: -10px;">
+  <strong>Figure 1.</strong> Monthly ECB MRO rate vs. Retail Housing Loan Rate (Germany)
+</p>
+---
+
+# Regression Analysis
+
+To quantify the strength and timing of the pass-through from ECB’s MRO rate to retail housing loan rates, we estimate a series of linear regression models. We also assess whether the effect is immediate or occurs with a lag.
+
+## Correlation
+
+We begin with a simple Pearson correlation analysis:
+
+```r
+cor_data <- merged %>% drop_na(mro_rate, loan_rate)
+cor_value <- cor(cor_data$mro_rate, cor_data$loan_rate, method = "pearson")
+cat("Pearson correlation:", round(cor_value, 3))
+```
+
+This yields a Pearson correlation of approximately 0.827, suggesting a strong positive relationship between the two rates.
+
+## Model Specification
+
+To formally test whether changes in the ECB’s MRO rate affect retail housing loan rates in Germany, we estimate three linear regression models using monthly data.
+
+Let \( y_t \) denote the retail housing loan rate at time \( t \), and \( r_t \) the MRO rate at time \( t \). We specify the following models:
+
+- **Model 1 (Contemporaneous MRO rate):**
+  
+  \[
+  y_t = \beta_0 + \beta_1 r_t + \varepsilon_t
+  \]
+
+- **Model 2 (Lagged MRO rate):**
+
+  \[
+  y_t = \beta_0 + \beta_1 r_{t-1} + \varepsilon_t
+  \]
+
+- **Model 3 (Both current and lagged MRO rate):**
+
+  \[
+  y_t = \beta_0 + \beta_1 r_t + \beta_2 r_{t-1} + \varepsilon_t
+  \]
+
+Model 1 tests for an immediate pass-through of monetary policy to loan rates. Model 2 accounts for a one-month delay in the transmission mechanism. Model 3 includes both terms to assess combined effects.
+
+The models are estimated using Ordinary Least Squares (OLS). In later sections, we also evaluate model robustness and investigate whether the assumptions underlying OLS hold in our case.
+
+## Regression Results
+
+We estimate three linear models to test whether retail housing loan rates in Germany respond to changes in the ECB’s MRO rate. The results are summarized below:
+
+- **Model 1 (Current MRO rate):**
+
+  \[
+  \widehat{y}_t = 2.23 + 0.75 \cdot r_t
+  \]
+
+  - Coefficient on \( r_t \): **0.75**, highly significant (**p < 0.001**)  
+  - Adjusted \( R^2 \): **0.682**
+
+- **Model 2 (Lagged MRO rate):**
+
+  \[
+  \widehat{y}_t = 2.23 + 0.75 \cdot r_{t-1}
+  \]
+
+  - Coefficient on \( r_{t-1} \): **0.75**, highly significant (**p < 0.001**)  
+  - Adjusted \( R^2 \): **0.686**
+
+- **Model 3 (Both current and lagged MRO rate):**
+
+  \[
+  \widehat{y}_t = 2.23 + 0.16 \cdot r_t + 0.59 \cdot r_{t-1}
+  \]
+
+  - Coefficient on \( r_t \): **0.16**, **not statistically significant** (p = 0.597)  
+  - Coefficient on \( r_{t-1} \): **0.59**, **marginally significant** (p = 0.054)  
+  - Adjusted \( R^2 \): **0.685**
+
+### Interpretation
+
+All three models confirm a positive relationship between the MRO rate and retail lending rates. However, **Model 2 performs best**, suggesting that the pass-through of monetary policy occurs **with a one-month delay**.
+
+In Model 3, the current MRO rate becomes statistically insignificant when the lagged rate is included, reinforcing the notion that the banking sector does not fully adjust rates contemporaneously.
+
+## Model Diagnostics
+
+To validate the assumptions of our linear regression model (Model 3), we examine four standard diagnostic plots:
+
+- **Residuals vs Fitted**: Assesses linearity and whether residuals are randomly distributed
+- **Normal Q-Q Plot**: Assesses normality of residuals
+- **Scale-Location Plot**: Assesses homoscedasticity (constant variance of residuals)
+- **Residuals vs Leverage**: Identifies influential observations that may distort the regression
+
+<p style="text-align: center;">
+  <img src="/Users/maverick/Desktop/ecb-rate-pass-through/output/figures/diagnostic_plots.png" width="90%">
+</p>
+
+<p style="text-align: center; font-size: 15px;">
+  <strong>Figure 2.</strong> Regression diagnostics for Model 3 (Residuals, Normal Q-Q, Scale-Location, Leverage).
+</p>
+
+### Interpretation
+
+- **Residuals vs Fitted**: The plot reveals a **non-random, curved pattern** in the residuals. This suggests potential **non-linearity**, indicating that a linear model may not fully capture the relationship between MRO and retail rates.
+
+- **Normal Q-Q Plot**: Residuals mostly follow the straight 45° line, with **mild deviations in the tails**. This suggests **approximate normality**, but some minor outliers may be present.
+
+- **Scale-Location Plot**: There is some visible **spread increase** of residuals with fitted values, implying **heteroskedasticity** — a key reason why we calculate **robust standard errors** in the next section.
+
+- **Residuals vs Leverage**: A few observations (e.g., **260**, **257**) have slightly elevated leverage but are not extreme. No point clearly violates the Cook’s distance threshold, so we retain all observations.
+
+Together, these plots highlight mild violations of model assumptions — most notably heteroskedasticity and non-linearity — which we address in subsequent steps.
+
+## Robust Standard Errors
+
+Based on the Scale-Location plot, we observed signs of **heteroskedasticity** — non-constant variance of residuals — which violates a core OLS assumption. To address this, we compute **robust standard errors** using the **HC1 correction** (heteroskedasticity-consistent covariance matrix).
+
+This adjustment allows us to make more reliable inferences even when residual variance is not constant.
+
+```r
+# --- Heteroskedasticity-Robust Standard Errors ---
+# Calculate robust standard errors
+robust_se <- coeftest(multi_model, vcov. = vcovHC(multi_model, type = "HC1"))
+capture.output(robust_se, file = "output/tables/multi_modal_robust.txt")
+```
+
+### Results
+
+The table below shows robust \( t \)-tests for Model 3 (current and lagged MRO):
+
+| Coefficient     | Estimate | Robust SE | t value | Pr(>|t|) |
+|-----------------|----------|-----------|---------|----------|
+| Intercept       | 2.228    | 0.056     | 40.09   | < 0.001  |
+| MRO Rate        | 0.161    | 0.282     | 0.57    | 0.571    |
+| Lagged MRO Rate | 0.586    | 0.286     | 2.05    | 0.042 *  |
+
+*Signif. codes: 0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05*
+
+### Interpretation
+
+- The **current MRO rate** is statistically **insignificant** when accounting for robust errors.
+- The **lagged MRO rate** remains **significant**, reinforcing the idea of a delayed pass-through.
+- The correction **does not change the direction** of the results but improves their reliability.
+
+
+## Model Fit: Predicted vs Actual Rates
+
+To visually assess how well Model 3 captures variation in retail loan rates, we plot the model's predicted values against the actual observations.
+
+The following code was used to generate and save the plot:
+
+```r
+# plot predicted vs actual loan rates
+cor_data$predicted <- predict(multi_model)
+
+ggplot(cor_data, aes(x = month)) +
+    geom_line(aes(y = loan_rate, color = "Actual"), linewidth = 1) +
+    geom_line(aes(y = predicted, color = "Predicted"), linewidth = 1, linetype = "dashed") +
+    labs(title = "Actual vs Predicted Loan Rates",
+         x = "Month", y = "Interest Rate (%)", color = "") +
+    theme_minimal() +
+    theme(
+        plot.background = element_rect(fill = "white", color = NA),
+        panel.background = element_rect(fill = "white", color = NA),
+        legend.position = "bottom",
+        legend.title = element_text(color = "black"),
+        legend.text = element_text(color = "black"),
+        plot.title = element_text(face = "bold", size = 14, color = "black"),
+        axis.text = element_text(color = "black"),
+        axis.title = element_text(color = "black")
+    )
+
+ggsave("output/figures/predicted_actual_loan_rate.png", width = 10, height = 6, dpi=300)
+```
+<p style="text-align: center;">
+  <img src="/Users/maverick/Desktop/ecb-rate-pass-through/output/figures/predicted_actual_loan_rate.png" width="90%">
+</p>
+
+<p style="text-align: center; font-size: 15px;">
+  <strong>Figure 3.</strong> Predicted vs Actual Retail Loan Rates (Model 3)
+</p>
+
+### Interpretation
+
+The plot confirms that the model tracks the **overall trend** in interest rates fairly well, particularly during major monetary policy shifts. However, the dashed prediction line appears **smoother** than the actual series, reflecting the limitations of a linear model in capturing **short-term fluctuations**.
+
+Despite this, the model accurately captures the **direction** and approximate **timing** of changes, reinforcing earlier results that the **lagged MRO rate** plays a more significant role in determining retail loan rates than the contemporaneous rate. This suggests a **delayed transmission mechanism** from monetary policy to retail lending conditions.
+
+## Model Comparison
+
+To compare the goodness-of-fit across model specifications, we compute the **Akaike Information Criterion (AIC)**, **Bayesian Information Criterion (BIC)**, and **Adjusted R²**. The table below summarizes the results:
+
+| Model        | AIC     | BIC     | Adjusted R² |
+|--------------|---------|---------|--------------|
+| **Model 1**: \( \text{LoanRate}_t \sim \text{MRO}_t \)           | 608.87  | 619.64  | 0.6820 |
+| **Model 2**: \( \text{LoanRate}_t \sim \text{MRO}_{t-1} \)       | 601.94  | 612.69  | 0.6858 |
+| **Model 3**: \( \text{LoanRate}_t \sim \text{MRO}_t + \text{MRO}_{t-1} \) | 603.66  | 617.99  | 0.6325 |
+
+### Interpretation
+
+Model 2 (lagged MRO only) achieves the **lowest AIC and BIC** and has the **highest Adjusted R²**, indicating that it provides the best balance between model fit and complexity.
+
+Model 3, which includes both contemporaneous and lagged rates, adds complexity but does **not improve** the model meaningfully—its adjusted R² is actually lower. This reinforces the economic intuition that **retail loan rates respond to policy rate changes with a delay**, rather than immediately.
+
+## Conclusion & Policy Implications
+
+This analysis examined the **interest rate pass-through** from the ECB’s Main Refinancing Operations (MRO) rate to **retail housing loan rates** in Germany using monthly data from 2003 onward.
+
+### Key Findings
+
+- There is a **strong positive correlation** between the MRO rate and retail loan rates.
+- Regression results show that the **lagged MRO rate** is more statistically significant than the contemporaneous one.
+- Model diagnostics highlight **minor violations** (e.g., heteroskedasticity, mild non-linearity), but the use of **robust standard errors** and a **log-linear model** improves reliability.
+- Model comparison using AIC, BIC, and Adjusted R² confirms that the **1-month lag model (Model 2)** provides the best fit.
+
+### Implications
+
+- Monetary policy decisions by the ECB **take time to impact retail lending conditions**, supporting the existence of a **delayed transmission mechanism**.
+- Policymakers should consider this lag when designing interventions, especially in times of economic stress.
+- For banks and financial institutions, expectations about **future ECB actions** may be more important for loan pricing than current policy rates.
+
+---
+
+Overall, this project demonstrates a clear, measurable link between central bank policy and consumer borrowing conditions — but one that operates with a **time delay**, reinforcing key concepts from monetary economics.
+
