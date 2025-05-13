@@ -32,8 +32,12 @@ multi_model <- lm(loan_rate ~ mro_rate + mro_lag1, data = cor_data)
 summary(multi_model)
 
 # basic diagnostic plots
+# Save diagnostics to file
+png("output/figures/diagnostic_plots.png", width = 1000, height = 800)
 par(mfrow = c(2, 2))
 plot(multi_model)
+par(mfrow = c(1, 1))  # reset layout
+dev.off()
 
 saveRDS(multi_model, file = "data/processed/multi_model.rds")
 capture.output(summary(multi_model), file = "output/tables/multi_model_summary.txt")
@@ -70,3 +74,16 @@ log_model <- lm(log(loan_rate) ~ mro_rate + mro_lag1, data = cor_data)
 summary(log_model)
 robust_log <- coeftest(log_model, vcov. = vcovHC(log_model, type = "HC1"))
 print(robust_log)
+
+
+# Model comparison
+model_comparison <- data.frame(
+    AIC = c(AIC(model), AIC(lag_model), AIC(multi_model)),
+    BIC = c(BIC(model), BIC(lag_model), BIC(multi_model)),
+    R_adj = c(summary(model)$adj.r.squared,
+              summary(lag_model)$adj.r.squared,
+              summary(log_model)$adj.r.squared
+    )
+)
+write_csv(model_comparison, file = "output/tables/model_comparison.csv")
+
